@@ -1,0 +1,26 @@
+{
+  "name": "pm-dashboard",
+  "version": "4.0.0",
+  "private": true,
+  "description": "PM Dashboard - Meta Ads & Social Media Performance Dashboard",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'No build step needed'",
+    "deploy": "vercel --prod",
+    "sync": "node scripts/google-sheets-sync.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "axios": "^1.6.0",
+    "googleapis": "^140.0.0",
+    "node-cache": "^5.1.2",
+    "pdfkit": "^0.14.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "vercel": "^37.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
