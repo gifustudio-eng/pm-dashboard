@@ -431,18 +431,20 @@ function updateSyncUI(color, text, sub) {
 
 async function loadData() {
   if (state.backendOnline) {
-    try {
-      const [clients, overview, kpi, sync] = await Promise.all([
-        apiFetch("/clients"), apiFetch("/dashboard/overview"),
-        apiFetch("/kpi/summary"), apiFetch("/sync/status")
-      ]);
-      state.clients = clients.data || [];
-      state.overview = overview.data;
-      state.kpiSummary = kpi.data || [];
-      state.syncStatus = sync.data;
-    } catch(e) {
-      state.clients = DEMO.clients;
-      toast("Gagal load dari API, pakai data demo","error");
+    const [clientsR, overviewR, kpiR, syncR] = await Promise.allSettled([
+      apiFetch("/clients"), apiFetch("/dashboard/overview"),
+      apiFetch("/kpi/summary"), apiFetch("/sync/status")
+    ]);
+
+    state.clients     = clientsR.status  === "fulfilled" ? (clientsR.value.data  || []) : DEMO.clients;
+    state.overview    = overviewR.status === "fulfilled" ? overviewR.value.data  : null;
+    state.kpiSummary  = kpiR.status      === "fulfilled" ? (kpiR.value.data      || []) : [];
+    state.syncStatus  = syncR.status     === "fulfilled" ? syncR.value.data      : null;
+
+    const failed = [clientsR, overviewR, kpiR, syncR].filter(r => r.status === "rejected");
+    if (failed.length > 0) {
+      console.warn("Beberapa endpoint gagal load:", failed.map(f => f.reason?.message));
+      toast(`${failed.length} data gagal load dari API, sebagian pakai data demo`, "warning");
     }
   } else {
     state.clients = DEMO.clients;
