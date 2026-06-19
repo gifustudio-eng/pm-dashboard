@@ -268,8 +268,9 @@ label{display:block;font-size:11px;color:var(--text3);margin-bottom:5px;font-wei
 <!-- Add Client Modal -->
 <div class="modal-overlay" id="modalAddClient">
   <div class="modal">
-    <div class="modal-title">Tambah Client Baru</div>
+    <div class="modal-title" id="clientModalTitle">Tambah Client Baru</div>
     <div class="modal-sub">Daftarkan client dan konfigurasi Meta Ad Account</div>
+    <input type="hidden" id="f_id">
     <div class="form-row">
       <div class="form-group"><label>Nama Client</label><input id="f_name" placeholder="PT Contoh Maju"></div>
       <div class="form-group"><label>Industri</label>
@@ -298,7 +299,7 @@ label{display:block;font-size:11px;color:var(--text3);margin-bottom:5px;font-wei
     </div>
     <div class="modal-footer">
       <button class="btn" onclick="closeModal('modalAddClient')">Batal</button>
-      <button class="btn btn-primary" onclick="submitAddClient()"><i class="ti ti-check"></i> Simpan Client</button>
+      <button class="btn btn-primary" id="clientSubmitBtn" onclick="submitClient()"><i class="ti ti-check"></i> Simpan Client</button>
     </div>
   </div>
 </div>
@@ -408,6 +409,37 @@ async function apiFetch(path, opts={}) {
   return res.json();
 }
 
+// Hitung KPI achievement dari data Ads asli (karena tabel social_insights
+// di Supabase cuma simpan ringkasan, bukan field kpiAchievement siap pakai)
+function computeKpiAchievement(targets, ads) {
+  const t = targets || {}, a = ads || {};
+  return {
+    roas:      { actual: a.roas||0,      target: t.roas||0,          achieved: (a.roas||0) >= (t.roas||0) },
+    cpl:       { actual: a.cpl||0,       target: t.cpl||0,           achieved: (a.cpl||0) > 0 ? (a.cpl <= t.cpl) : true },
+    ctr:       { actual: a.ctr||0,       target: t.ctr||0,           achieved: (a.ctr||0) >= (t.ctr||0) },
+    leads:     { actual: a.leads||0,     target: t.leadsPerMonth||0, achieved: (a.leads||0) >= (t.leadsPerMonth||0) },
+    frequency: { actual: a.frequency||0, target: t.frequency||0,     achieved: (a.frequency||0) > 0 ? (a.frequency <= t.frequency) : true }
+  };
+}
+
+// Normalisasi 1 client dari API (snake_case/field beda nama) jadi
+// bentuk yang dipakai kode render (sama seperti shape DEMO data)
+function normalizeClient(c) {
+  const ads = c.insights?.ads || {};
+  const overallScore = c.insights?.overall_score ?? c.insights?.overallScore ?? 0;
+  return {
+    ...c,
+    budgetPerMonth: c.budget ?? c.budgetPerMonth ?? 0,
+    metaAdAccountId: c.metaId ?? c.metaAdAccountId ?? "-",
+    insights: c.insights ? {
+      overallScore,
+      summary: ads,
+      kpiAchievement: computeKpiAchievement(c.kpiTargets, ads),
+      dailyTrend: c.insights.dailyTrend || []
+    } : null
+  };
+}
+
 async function checkBackend() {
   try {
     await apiFetch("/health");
@@ -436,7 +468,7 @@ async function loadData() {
       apiFetch("/kpi/summary"), apiFetch("/sync/status")
     ]);
 
-    state.clients     = clientsR.status  === "fulfilled" ? (clientsR.value.data  || []) : DEMO.clients;
+    state.clients     = clientsR.status  === "fulfilled" ? (clientsR.value.data  || []).map(normalizeClient) : DEMO.clients;
     state.overview    = overviewR.status === "fulfilled" ? overviewR.value.data  : null;
     state.kpiSummary  = kpiR.status      === "fulfilled" ? (kpiR.value.data      || []) : [];
     state.syncStatus  = syncR.status     === "fulfilled" ? syncR.value.data      : null;
@@ -642,7 +674,8 @@ function renderClients() {
       <div style="display:flex;gap:6px;margin-top:12px">
         <button class="btn btn-sm" style="flex:1" onclick="navigate('kpi')"><i class="ti ti-target"></i> KPI</button>
         <button class="btn btn-sm" style="flex:1" onclick="navigate('meta')"><i class="ti ti-brand-meta"></i> Meta</button>
-        <button class="btn btn-sm" style="flex:1" onclick="navigate('campaigns')"><i class="ti ti-speakerphone"></i> Ads</button>
+        <button class="btn btn-sm" onclick="showEditClientModal(${c.id})" title="Edit"><i class="ti ti-pencil"></i></button>
+        <button class="btn btn-sm" style="color:var(--rose)" onclick="deleteClientConfirm(${c.id},'${(c.name||"").replace(/'/g,"\\'")}')" title="Hapus"><i class="ti ti-trash"></i></button>
       </div>
     </div>`;
   }).join("")}
@@ -733,9 +766,26 @@ function loadKPIClient(idx) {
     }).join("")}
     </div>
   </div>
-  <div class="card">
+  <div class="card" style="margin-bottom:16px">
     <div class="card-header"><div class="card-title">Trend ROAS — ${state.preset}</div></div>
     <div style="height:200px;position:relative"><canvas id="kpiTrendChart"></canvas></div>
+  </div>
+  <div class="card" id="contentKpiCard">
+    <div class="card-header">
+      <div>
+        <div class="card-title">🗓️ Target Konten Bulanan</div>
+        <div class="card-sub">${new Date().toLocaleDateString("id-ID",{month:"long",year:"numeric"})}</div>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="saveContentKPI(${c.id})"><i class="ti ti-check"></i> Simpan</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px">
+      <div class="form-group"><label>Target Feed/Bulan</label><input id="ck_feed" type="number" placeholder="12"></div>
+      <div class="form-group"><label>Target Reel/Bulan</label><input id="ck_reel" type="number" placeholder="8"></div>
+      <div class="form-group"><label>Target Story/Bulan</label><input id="ck_story" type="number" placeholder="20"></div>
+      <div class="form-group"><label>Frekuensi/Minggu</label><input id="ck_freq" type="number" placeholder="3"></div>
+    </div>
+    <div class="form-group" style="margin-top:8px"><label>Catatan</label><input id="ck_note" placeholder="Catatan untuk content plan bulan ini"></div>
+    <div id="ck_status" style="font-size:11px;color:var(--text3);margin-top:8px">Memuat target konten...</div>
   </div>`;
 
   destroyChart("kpiTrendChart");
@@ -750,6 +800,51 @@ function loadKPIClient(idx) {
       {label:"Target",data:labels.map(()=>roasTarget),borderColor:"#F59E0B",borderDash:[5,4],borderWidth:1.5,pointRadius:0,fill:false}
     ]},options:chartOpts({legend:false})});
   },80);
+
+  loadContentKPI(c.id);
+}
+
+// ── CONTENT KPI (Target Feed/Reel per bulan) ─────────────────
+async function loadContentKPI(clientId) {
+  const statusEl = document.getElementById("ck_status");
+  if (!state.backendOnline) {
+    statusEl.textContent = "Backend tidak terhubung — target konten tidak bisa dimuat/disimpan.";
+    return;
+  }
+  const yearMonth = new Date().toISOString().slice(0,7);
+  try {
+    const res = await apiFetch(`/content/kpi?clientId=${clientId}&yearMonth=${yearMonth}`);
+    const d = res.data;
+    document.getElementById("ck_feed").value  = d?.feed  ?? "";
+    document.getElementById("ck_reel").value  = d?.reel  ?? "";
+    document.getElementById("ck_story").value = d?.story ?? "";
+    document.getElementById("ck_freq").value  = d?.freq  ?? "";
+    document.getElementById("ck_note").value  = d?.note  ?? "";
+    statusEl.textContent = d ? `Terakhir disimpan: ${new Date(d.updatedAt).toLocaleString("id-ID")}` : "Belum ada target konten untuk bulan ini.";
+  } catch(e) {
+    statusEl.textContent = `Gagal memuat target konten: ${e.message}`;
+  }
+}
+
+async function saveContentKPI(clientId) {
+  if (!state.backendOnline) { toast("Backend tidak terhubung. Tidak bisa simpan ke database.","warning"); return; }
+  const yearMonth = new Date().toISOString().slice(0,7);
+  const payload = {
+    clientId, yearMonth,
+    total: (parseInt(document.getElementById("ck_feed").value)||0) + (parseInt(document.getElementById("ck_reel").value)||0) + (parseInt(document.getElementById("ck_story").value)||0),
+    feed:  parseInt(document.getElementById("ck_feed").value)  || 0,
+    reel:  parseInt(document.getElementById("ck_reel").value)  || 0,
+    story: parseInt(document.getElementById("ck_story").value) || 0,
+    freq:  parseInt(document.getElementById("ck_freq").value)  || 0,
+    note:  document.getElementById("ck_note").value || ""
+  };
+  try {
+    await apiFetch("/content/kpi", { method:"POST", body: JSON.stringify(payload) });
+    toast("Target konten bulan ini berhasil disimpan!","success");
+    loadContentKPI(clientId);
+  } catch(e) {
+    toast(`Gagal simpan target konten: ${e.message}`,"error");
+  }
 }
 
 // ── META ──────────────────────────────────────────────────
@@ -1065,31 +1160,88 @@ document.querySelectorAll(".modal-overlay").forEach(m=>{
   m.addEventListener("click",e=>{ if(e.target===m)closeModal(m.id); });
 });
 
-function submitAddClient() {
-  const name=document.getElementById("f_name").value.trim();
-  if(!name){toast("Nama client harus diisi","error");return;}
-  const newClient={
-    id:state.clients.length+1,
-    name,industry:document.getElementById("f_industry").value,
-    pic:document.getElementById("f_pic").value||"-",
-    budgetPerMonth:parseInt(document.getElementById("f_budget").value)||0,
-    metaAdAccountId:document.getElementById("f_metaid").value||"act_pending",
-    status:"Active",
-    kpiTargets:{
-      roas:parseFloat(document.getElementById("f_roas").value)||4,
-      cpl:parseInt(document.getElementById("f_cpl").value)||30000,
-      ctr:parseFloat(document.getElementById("f_ctr").value)||2,
-      leadsPerMonth:parseInt(document.getElementById("f_leads").value)||100,
-      impressions:parseInt(document.getElementById("f_impr").value)||300000,
-      frequency:parseFloat(document.getElementById("f_freq").value)||3
-    },
-    insights:{overallScore:0,summary:{spend:0,impressions:0,clicks:0,reach:0,leads:0,purchaseValue:0,ctr:0,cpm:0,cpc:0,cpl:0,roas:0,frequency:0},kpiAchievement:{},dailyTrend:[]}
-  };
-  state.clients.push(newClient);
-  closeModal("modalAddClient");
+function showAddClientModal(){
+  document.getElementById("f_id").value = "";
+  document.getElementById("clientModalTitle").textContent = "Tambah Client Baru";
   document.querySelectorAll("#f_name,#f_pic,#f_budget,#f_metaid,#f_roas,#f_cpl,#f_ctr,#f_leads,#f_impr,#f_freq").forEach(el=>el.value="");
-  toast(`Client "${name}" berhasil ditambahkan!`,"success");
-  renderPage();
+  document.getElementById("f_industry").selectedIndex = 0;
+  openModal("modalAddClient");
+}
+
+function showEditClientModal(id){
+  const c = state.clients.find(x => x.id === id);
+  if (!c) { toast("Client tidak ditemukan","error"); return; }
+  document.getElementById("f_id").value = c.id;
+  document.getElementById("clientModalTitle").textContent = `Edit Client — ${c.name}`;
+  document.getElementById("f_name").value = c.name || "";
+  document.getElementById("f_industry").value = c.industry || "E-Commerce";
+  document.getElementById("f_pic").value = c.pic || "";
+  document.getElementById("f_budget").value = c.budgetPerMonth || "";
+  document.getElementById("f_metaid").value = c.metaAdAccountId || "";
+  const kt = c.kpiTargets || {};
+  document.getElementById("f_roas").value = kt.roas || "";
+  document.getElementById("f_cpl").value = kt.cpl || "";
+  document.getElementById("f_ctr").value = kt.ctr || "";
+  document.getElementById("f_leads").value = kt.leadsPerMonth || "";
+  document.getElementById("f_impr").value = kt.impressions || "";
+  document.getElementById("f_freq").value = kt.frequency || "";
+  openModal("modalAddClient");
+}
+
+async function submitClient() {
+  if (!state.backendOnline) { toast("Backend tidak terhubung. Tidak bisa simpan ke database.","warning"); return; }
+  const name = document.getElementById("f_name").value.trim();
+  if (!name) { toast("Nama client harus diisi","error"); return; }
+  const id = document.getElementById("f_id").value;
+
+  const payload = {
+    name,
+    industry: document.getElementById("f_industry").value,
+    pic: document.getElementById("f_pic").value || "-",
+    budget: parseInt(document.getElementById("f_budget").value) || 0,
+    metaId: document.getElementById("f_metaid").value || "act_pending",
+    kpiTargets: {
+      roas: parseFloat(document.getElementById("f_roas").value) || 4,
+      cpl: parseInt(document.getElementById("f_cpl").value) || 30000,
+      ctr: parseFloat(document.getElementById("f_ctr").value) || 2,
+      leadsPerMonth: parseInt(document.getElementById("f_leads").value) || 100,
+      impressions: parseInt(document.getElementById("f_impr").value) || 300000,
+      frequency: parseFloat(document.getElementById("f_freq").value) || 3
+    }
+  };
+
+  const btn = document.getElementById("clientSubmitBtn");
+  btn.disabled = true; btn.innerHTML = `<i class="ti ti-loader-2" style="animation:spin 1s linear infinite"></i> Menyimpan...`;
+
+  try {
+    if (id) {
+      await apiFetch(`/clients?id=${id}`, { method:"PUT", body: JSON.stringify(payload) });
+      toast(`Client "${name}" berhasil diupdate!`,"success");
+    } else {
+      await apiFetch("/clients", { method:"POST", body: JSON.stringify(payload) });
+      toast(`Client "${name}" berhasil ditambahkan!`,"success");
+    }
+    closeModal("modalAddClient");
+    await loadData();
+    renderPage();
+  } catch(e) {
+    toast(`Gagal simpan client: ${e.message}`,"error");
+  } finally {
+    btn.disabled = false; btn.innerHTML = `<i class="ti ti-check"></i> Simpan Client`;
+  }
+}
+
+async function deleteClientConfirm(id, name) {
+  if (!state.backendOnline) { toast("Backend tidak terhubung. Tidak bisa hapus dari database.","warning"); return; }
+  if (!confirm(`Hapus client "${name}"? Data insight terkait akan ikut terhapus dan tidak bisa dibatalkan.`)) return;
+  try {
+    await apiFetch(`/clients?id=${id}`, { method:"DELETE" });
+    toast(`Client "${name}" berhasil dihapus`,"success");
+    await loadData();
+    renderPage();
+  } catch(e) {
+    toast(`Gagal hapus client: ${e.message}`,"error");
+  }
 }
 
 function doExport(type) {
